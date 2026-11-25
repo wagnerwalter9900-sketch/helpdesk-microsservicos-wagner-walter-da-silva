@@ -1,0 +1,133 @@
+# HelpDesk TI em microsserviços.
+# Só o gateway publica porta (8000). Os serviços, os bancos e a fila ficam
+# na rede interna do Docker e se chamam pelo nome (http://usuarios:8000).
+
+x-servico: &servico
+  env_file:
+    - path: .env
+      required: false
+  environment: &ambiente
+    DADOS_EXEMPLO: ${DADOS_EXEMPLO:-1}
+    JWT_SEGREDO_ARQUIVO: /run/segredos/jwt
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/saude', timeout=2)"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+
+services:
+  # Gera um segredo aleatório para o JWT na primeira vez (fica no volume "segredos").
+  # Se JWT_SEGREDO estiver definido no .env, ele tem prioridade.
+  segredo:
+    image: alpine:3.20
+    command: ["sh", "-c", "[ -s /segredos/jwt ] || (head -c 48 /dev/urandom | base64 | tr -d '\\n' > /segredos/jwt && chmod 444 /segredos/jwt)"]
+    volumes:
+      - segredos:/segredos
+    network_mode: none
+
+  gateway:
+    <<: *servico
+    build: ./servicos/gateway
+    ports:
+      - "127.0.0.1:8000:8000"   # o único ponto de entrada
+    environment:
+      USUARIOS_URL: http://usuarios:8000
+      INVENTARIO_URL: http://inventario:8000
+      CHAMADOS_URL: http://chamados:8000
+      NOTIFICACOES_URL: http://notificacoes:8000
+    depends_on:
+      usuarios: { condition: service_healthy }
+      inventario: { condition: service_healthy }
+      chamados: { condition: service_healthy }
+      notificacoes: { condition: service_healthy }
+
+  usuarios:
+    <<: *servico
+    build: ./servicos/usuarios
+    environment:
+      <<: *ambiente
+      DATABASE_URL: sqlite:////dados/usuarios.db
+    volumes:
+      - banco-usuarios:/dados
+      - segredos:/run/segredos:ro
+    depends_on:
+      segredo: { condition: service_completed_successfully }
+
+  inventario:
+    <<: *servico
+    build: ./servicos/inventario
+    environment:
+      <<: *ambiente
+      DATABASE_URL: sqlite:////dados/inventario.db
+    volumes:
+      - banco-inventario:/dados
+      - segredos:/run/segredos:ro
+    depends_on:
+      segredo: { condition: service_completed_successfully }
+
+  chamados:
+    <<: *servico
+    build: ./servicos/chamados
+    environment:
+      <<: *ambiente
+      DATABASE_URL: sqlite:////dados/chamados.db
+      USUARIOS_URL: http://usuarios:8000
+      INVENTARIO_URL: http://inventario:8000
+      TIMEOUT_SERVICOS: "3"
+      REDIS_URL: redis://fila:6379/0
+    volumes:
+      - banco-chamados:/dados
+      - segredos:/run/segredos:ro
+    depends_on:
+      segredo: { condition: service_completed_successfully }
+      fila: { condition: service_healthy }
+
+  notificacoes:
+    <<: *servico
+    build: ./servicos/notificacoes
+    environment:
+      <<: *ambiente
+      DATABASE_URL: sqlite:////dados/notificacoes.db
+      REDIS_URL: redis://fila:6379/0
+    volumes:
+      - banco-notificacoes:/dados
+      - segredos:/run/segredos:ro
+    depends_on:
+      segredo: { condition: service_completed_successfully }
+      fila: { condition: service_healthy }
+
+  # Fila de eventos (bônus): o Chamados publica, o Notificações consome.
+  fila:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    user: "999:1000"
+    volumes:
+      - fila:/data
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+# Um volume (banco) por serviço: nenhum serviço enxerga o banco do outro.
+volumes:
+  segredos:
+  banco-usuarios:
+  banco-inventario:
+  banco-chamados:
+  banco-notificacoes:
+  fila:
