@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directories:
+      - /servicos/usuarios
+      - /servicos/inventario
+      - /servicos/chamados
+      - /servicos/notificacoes
+      - /servicos/gateway
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directories:
+      - /servicos/usuarios
+      - /servicos/inventario
+      - /servicos/chamados
+      - /servicos/notificacoes
+      - /servicos/gateway
+    schedule:
+      interval: weekly
