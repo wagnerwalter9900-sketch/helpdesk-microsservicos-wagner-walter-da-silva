@@ -1,0 +1,47 @@
+name: Testes e segurança
+on: [push, pull_request]
+
+# O workflow só pode ler o código (privilégio mínimo)
+permissions:
+  contents: read
+
+jobs:
+  testes:
+    name: Testes de ${{ matrix.servico }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        servico: [usuarios, inventario, chamados, notificacoes, gateway]
+    defaults:
+      run:
+        working-directory: servicos/${{ matrix.servico }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - name: Testes (inclui testes de segurança)
+        run: pytest -q
+      - name: Dependências com falhas conhecidas
+        run: pip-audit -r requirements.txt
+
+  compose:
+    name: docker compose sobe tudo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Sobe todos os serviços
+        run: docker compose up --build -d --wait
+      - name: Gateway mostra todos os serviços no ar
+        run: |
+          curl -fsS http://127.0.0.1:8000/saude
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/chamados)" = "401"
+      - name: Desce tudo
+        if: always()
+        run: docker compose down -v

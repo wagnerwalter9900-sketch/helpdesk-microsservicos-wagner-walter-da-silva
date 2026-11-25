@@ -1,0 +1,1 @@
+"""Avisos enviados aos usuários."""
